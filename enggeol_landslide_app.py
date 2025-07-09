@@ -290,7 +290,7 @@ col_main, col_filters = st.columns([3, 1])
 
 with col_main:
     # Filter wilayah
-    regency_col = "Regency/City"
+    regency_col = "Regency_City"
     district_col_df = "District"
     district_col_gdf = "KECAMATAN"
     boundary_col = "KABKOT"
