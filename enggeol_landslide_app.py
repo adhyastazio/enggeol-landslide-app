@@ -12,6 +12,7 @@ from PIL import Image
 import base64
 from io import BytesIO
 import os
+import re
 
 # ---------------------
 # Page Configuration
@@ -151,6 +152,25 @@ def login():
 # ---------------------
 # Load data from BigQuery
 # ---------------------
+def dms_to_dd(dms_str):
+    """
+    Convert DMS string like '7°35\'9.81"S' or '108° 6\'16.38"E' to decimal degrees.
+    """
+    dms_str = dms_str.strip()
+    # Pola regex: derajat °, menit ', detik ", dan arah (N/S/E/W)
+    match = re.match(r'(\d+)[°\s]+(\d+)[\'′\s]+([\d.]+)["″]?\s*([NSEW])', dms_str)
+
+    if not match:
+        return None
+
+    degrees, minutes, seconds, direction = match.groups()
+    dd = float(degrees) + float(minutes)/60 + float(seconds)/3600
+
+    if direction in ['S', 'W']:
+        dd *= -1
+
+    return dd
+
 @st.cache_data
 def load_data_from_bigquery():
     credentials = service_account.Credentials.from_service_account_info(
@@ -163,6 +183,9 @@ def load_data_from_bigquery():
     SELECT * FROM `enggeol-riset-kolaborasi.Longsoran.longsoran_jabar`
     """
     df = client.query(query).to_dataframe()
+
+    df["Lattitute Decimals"] = df["Lattitute"].apply(dms_to_dd)
+    df["Longitude Decimals"] = df["Longitude"].apply(dms_to_dd)
     return df
 
 def load_boundaries():
