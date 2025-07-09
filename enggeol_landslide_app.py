@@ -304,10 +304,9 @@ with col_main:
         selected_region = st.selectbox("Pilih Kabupaten/Kota", ["Semua"] + sorted(gdf[boundary_col].unique()))
     
     # Konversi df ke GeoDataFrame
-    df = df.dropna(subset=["Latitude Decimals", "Longitude Decimals"])
-    df["Latitude Decimals"] = pd.to_numeric(df["Latitude Decimals"], errors="coerce")
+    df = df.dropna(subset=["Lattitute Decimals", "Longitude Decimals"])
+    df["Latitude Decimals"] = pd.to_numeric(df["Lattitute Decimals"], errors="coerce")
     df["Longitude Decimals"] = pd.to_numeric(df["Longitude Decimals"], errors="coerce")
-    df = df.dropna(subset=["Latitude Decimals", "Longitude Decimals"])
     gdf_points = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df["Longitude Decimals"], df["Latitude Decimals"]), crs="EPSG:4326")
 
     if selected_region != "Semua":
