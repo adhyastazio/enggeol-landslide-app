@@ -416,6 +416,11 @@ def upload_landslide_pic_to_gcs(filename, uploaded_file):
     return blob.public_url
 
 if st.session_state.role == "editor":
+    page = st.sidebar.radio("Mode", ["Viewer", "Editor"], label_visibility="visible")
+else:
+    page = "Viewer"
+
+if page == "Editor":
     st.markdown("## ✏️ Editor Panel")
     st.markdown("Tambah atau hapus data longsor di sini.")
 
