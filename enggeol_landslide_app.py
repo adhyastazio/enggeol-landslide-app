@@ -186,7 +186,7 @@ def load_boundaries():
 def create_sidebar():
     with st.sidebar:
         # User Profile Section
-        st.markdown("### 👤 Profil Pengguna")
+        st.markdown("###Profil Pengguna")
         with st.container():
             col1, col2 = st.columns([1, 2])
             with col1:
@@ -403,6 +403,15 @@ with st.sidebar:
 # ---------------------
 # Editor Panel (for editor role)
 # ---------------------
+@st.cache_data(show_spinner=False)
+def get_last_50_landslides():
+    credentials = service_account.Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"]
+    )
+    client = bigquery.Client(credentials=credentials, project=st.secrets["gcp_service_account"]["project_id"])
+    query = "SELECT `L-ID`, Regency_City, District, Village, Lattitute, Longitude, Date FROM `enggeol-riset-kolaborasi.Longsoran.longsoran_jabar` ORDER BY Date DESC LIMIT 50"
+    return client.query(query).to_dataframe()
+
 def upload_landslide_pic_to_gcs(filename, uploaded_file):
     credentials = service_account.Credentials.from_service_account_info(
         st.secrets["gcp_service_account"]
@@ -415,6 +424,7 @@ def upload_landslide_pic_to_gcs(filename, uploaded_file):
     blob.make_public()
     return blob.public_url
 
+# Role-based mode selection
 if st.session_state.role == "editor":
     page = st.sidebar.radio("Mode", ["Viewer", "Editor"], label_visibility="visible")
 else:
@@ -439,7 +449,6 @@ if page == "Editor":
         landslide_length = st.text_input("Landslide Length _m_")
         landslide_width = st.text_input("Landslide Width _m_")
         landslide_height = st.text_input("Landslide Height _m_")
-        landslide_type = st.text_input("Landslide Type")
         landslide_date = st.text_input("Historical Landslide Date")
         landslide_pic = st.file_uploader("Upload Foto Longsor", type=["jpg", "jpeg", "png"])
         additional_comments = st.text_area("Additional Comments")
@@ -472,7 +481,6 @@ if page == "Editor":
                 "Landslide Length _m_": landslide_length,
                 "Landslide Width _m_": landslide_width,
                 "Landslide Height _m_": landslide_height,
-                "Landslide Type": landslide_type,
                 "Historical Landslide Date": landslide_date,
                 "image_url": img_url,
                 "Additional Comments": additional_comments,
@@ -487,12 +495,11 @@ if page == "Editor":
 
     # Remove landslide data (show last 50 entries)
     st.write("### Hapus Data Longsor")
+    df_editor = get_last_50_landslides()
     credentials = service_account.Credentials.from_service_account_info(
         st.secrets["gcp_service_account"]
     )
     client = bigquery.Client(credentials=credentials, project=st.secrets["gcp_service_account"]["project_id"])
-    query = "SELECT `L-ID`, Regency_City, District, Village, Lattitute, Longitude, Date FROM `enggeol-riset-kolaborasi.Longsoran.longsoran_jabar` ORDER BY Date DESC LIMIT 50"
-    df_editor = client.query(query).to_dataframe()
     for idx, row in df_editor.iterrows():
         st.write(f"{row['Regency_City']} - {row['District']} - {row['Village']} ({row['Lattitute']}, {row['Longitude']}) [{row['Date']}]")
         if st.button(f"Hapus {row['L-ID']}", key=f"del_{row['L-ID']}"):
@@ -503,6 +510,7 @@ if page == "Editor":
             client.query(delete_query).result()
             st.success("Data berhasil dihapus.")
             st.rerun()
+    st.stop()
 
 # CSS for better styling
 st.markdown("""
