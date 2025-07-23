@@ -435,7 +435,7 @@ if page == "Editor":
     st.markdown("Tambah atau hapus data longsor di sini.")
 
     # Add new landslide data
-    with st.form("add_landslide_form"):
+    with st.form(key="add_landslide_form"):
         st.write("### Tambah Data Longsor Baru")
         regency = st.text_input("Kabupaten/Kota", key="editor_regency")
         district = st.text_input("Kecamatan", key="editor_district")
@@ -452,46 +452,46 @@ if page == "Editor":
         landslide_date = st.text_input("Historical Landslide Date", key="editor_date")
         landslide_pic = st.file_uploader("Upload Foto Longsor", type=["jpg", "jpeg", "png"], key="editor_pic")
         additional_comments = st.text_area("Additional Comments", key="editor_comments")
-        submit_btn = st.form_submit_button("Tambah Data")
+        submit_btn = st.form_submit_button(label="Tambah Data")
 
-        if submit_btn:
-            img_url = None
-            if landslide_pic:
-                img_url = upload_landslide_pic_to_gcs(
-                    f"{regency}_{district}_{village}_{pd.Timestamp.now().strftime('%Y%m%d%H%M%S')}",
-                    landslide_pic
-                )
-            credentials = service_account.Credentials.from_service_account_info(
-                st.secrets["gcp_service_account"]
+    if submit_btn:
+        img_url = None
+        if landslide_pic:
+            img_url = upload_landslide_pic_to_gcs(
+                f"{regency}_{district}_{village}_{pd.Timestamp.now().strftime('%Y%m%d%H%M%S')}",
+                landslide_pic
             )
-            client = bigquery.Client(credentials=credentials, project=st.secrets["gcp_service_account"]["project_id"])
-            table_id = "enggeol-riset-kolaborasi.Longsoran.longsoran_jabar"
-            new_lid = f"L{pd.Timestamp.now().strftime('%Y%m%d%H%M%S')}"  # Simple unique L-ID
-            rows_to_insert = [{
-                "L-ID": new_lid,
-                "Regency_City": regency,
-                "District": district,
-                "Village": village,
-                "Lattitute": latitude,
-                "Longitude": longitude,
-                "Elevation _m_": elevation,
-                "Observed Lithology": observed_lithology,
-                "Landslide Type": landslide_type,
-                "Landslide Material": landslide_material,
-                "Landslide Length _m_": landslide_length,
-                "Landslide Width _m_": landslide_width,
-                "Landslide Height _m_": landslide_height,
-                "Historical Landslide Date": landslide_date,
-                "image_url": img_url,
-                "Additional Comments": additional_comments,
-                "Data Entry": st.session_state.username,
-                "Date": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
-            }]
-            errors = client.insert_rows_json(table_id, rows_to_insert)
-            if errors == []:
-                st.success("Data longsor berhasil ditambahkan!")
-            else:
-                st.error(f"Gagal menambah data: {errors}")
+        credentials = service_account.Credentials.from_service_account_info(
+            st.secrets["gcp_service_account"]
+        )
+        client = bigquery.Client(credentials=credentials, project=st.secrets["gcp_service_account"]["project_id"])
+        table_id = "enggeol-riset-kolaborasi.Longsoran.longsoran_jabar"
+        new_lid = f"L{pd.Timestamp.now().strftime('%Y%m%d%H%M%S')}"
+        rows_to_insert = [{
+            "L-ID": new_lid,
+            "Regency_City": regency,
+            "District": district,
+            "Village": village,
+            "Lattitute": latitude,
+            "Longitude": longitude,
+            "Elevation _m_": elevation,
+            "Observed Lithology": observed_lithology,
+            "Landslide Type": landslide_type,
+            "Landslide Material": landslide_material,
+            "Landslide Length _m_": landslide_length,
+            "Landslide Width _m_": landslide_width,
+            "Landslide Height _m_": landslide_height,
+            "Historical Landslide Date": landslide_date,
+            "image_url": img_url,
+            "Additional Comments": additional_comments,
+            "Data Entry": st.session_state.username,
+            "Date": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
+        }]
+        errors = client.insert_rows_json(table_id, rows_to_insert)
+        if not errors:
+            st.success("Data longsor berhasil ditambahkan!")
+        else:
+            st.error(f"Gagal menambah data: {errors}")
 
     # Remove landslide data (show last 50 entries)
     st.write("### Hapus Data Longsor")
@@ -510,8 +510,8 @@ if page == "Editor":
             client.query(delete_query).result()
             st.success("Data berhasil dihapus.")
             st.rerun()
-    st.stop()
 
+    st.stop()
 # CSS for better styling
 st.markdown("""
 <style>
