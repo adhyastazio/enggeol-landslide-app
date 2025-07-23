@@ -452,7 +452,7 @@ if page == "Editor":
         landslide_date = st.text_input("Historical Landslide Date", key="editor_date")
         landslide_pic = st.file_uploader("Upload Foto Longsor", type=["jpg", "jpeg", "png"], key="editor_pic")
         additional_comments = st.text_area("Additional Comments", key="editor_comments")
-        submit_btn = st.form_submit_button("Tambah Data", key="editor_submit")
+        submit_btn = st.form_submit_button("Tambah Data")
 
         if submit_btn:
             img_url = None
