@@ -151,7 +151,9 @@ def dms_to_dd(dms_str):
     """
     Convert DMS string like '7°35\'9.81"S' or '108° 6\'16.38"E' to decimal degrees.
     """
-    dms_str = dms_str.strip()
+    if pd.isna(dms_str) or not dms_str:
+        return None
+    dms_str = str(dms_str).strip()
     match = re.match(r'(\d+)[°\s]+(\d+)[\'′\s]+([\d.]+)["″]?\s*([NSEW])', dms_str)
     if not match:
         return None
@@ -163,22 +165,31 @@ def dms_to_dd(dms_str):
 
 @st.cache_data
 def load_data_from_bigquery():
-    credentials = service_account.Credentials.from_service_account_info(
-        st.secrets["gcp_service_account"]  
-    )
-    project_id = "enggeol-riset-kolaborasi"
-    client = bigquery.Client(credentials=credentials, project=st.secrets["gcp_service_account"]["project_id"])
-    query = """
-    SELECT * FROM `enggeol-riset-kolaborasi.Longsoran.longsoran_jabar`
-    """
-    df = client.query(query).to_dataframe()
-    df["Lattitute Decimals"] = df["Lattitute"].apply(dms_to_dd)
-    df["Longitude Decimals"] = df["Longitude"].apply(dms_to_dd)
-    return df
+    try:
+        credentials = service_account.Credentials.from_service_account_info(
+            st.secrets["gcp_service_account"]  
+        )
+        project_id = "enggeol-riset-kolaborasi"
+        client = bigquery.Client(credentials=credentials, project=st.secrets["gcp_service_account"]["project_id"])
+        query = """
+        SELECT * FROM `enggeol-riset-kolaborasi.Longsoran.longsoran_jabar`
+        """
+        df = client.query(query).to_dataframe()
+        df["Lattitute Decimals"] = df["Lattitute"].apply(dms_to_dd)
+        df["Longitude Decimals"] = df["Longitude"].apply(dms_to_dd)
+        return df
+    except Exception as e:
+        st.error(f"Error loading data from BigQuery: {e}")
+        return pd.DataFrame()
 
+@st.cache_data
 def load_boundaries():
-    gdf = gpd.read_file("Jabar_By_Kec.geojson") 
-    return gdf
+    try:
+        gdf = gpd.read_file("Jabar_By_Kec.geojson") 
+        return gdf
+    except Exception as e:
+        st.error(f"Error loading boundary data: {e}")
+        return gpd.GeoDataFrame()
 
 # ---------------------
 # Sidebar Functions
@@ -186,7 +197,7 @@ def load_boundaries():
 def create_sidebar():
     with st.sidebar:
         # User Profile Section
-        st.markdown("###Profil Pengguna")
+        st.markdown("### Profil Pengguna")
         with st.container():
             col1, col2 = st.columns([1, 2])
             with col1:
@@ -262,6 +273,11 @@ display_mode, base_layer, show_boundaries, show_labels = create_sidebar()
 # Load data
 df = load_data_from_bigquery()
 gdf = load_boundaries()
+
+if df.empty or gdf.empty:
+    st.error("Could not load required data. Please check your configuration.")
+    st.stop()
+
 df.columns = df.columns.str.strip()
 
 # Main content area
@@ -405,24 +421,33 @@ with st.sidebar:
 # ---------------------
 @st.cache_data(show_spinner=False)
 def get_last_50_landslides():
-    credentials = service_account.Credentials.from_service_account_info(
-        st.secrets["gcp_service_account"]
-    )
-    client = bigquery.Client(credentials=credentials, project=st.secrets["gcp_service_account"]["project_id"])
-    query = "SELECT `L-ID`, Regency_City, District, Village, Lattitute, Longitude, Date FROM `enggeol-riset-kolaborasi.Longsoran.longsoran_jabar` ORDER BY Date DESC LIMIT 50"
-    return client.query(query).to_dataframe()
+    try:
+        credentials = service_account.Credentials.from_service_account_info(
+            st.secrets["gcp_service_account"]
+        )
+        client = bigquery.Client(credentials=credentials, project=st.secrets["gcp_service_account"]["project_id"])
+        query = "SELECT `L-ID`, Regency_City, District, Village, Lattitute, Longitude, Date FROM `enggeol-riset-kolaborasi.Longsoran.longsoran_jabar` ORDER BY Date DESC LIMIT 50"
+        return client.query(query).to_dataframe()
+    except Exception as e:
+        st.error(f"Error loading landslide data: {e}")
+        return pd.DataFrame()
 
 def upload_landslide_pic_to_gcs(filename, uploaded_file):
-    credentials = service_account.Credentials.from_service_account_info(
-        st.secrets["gcp_service_account"]
-    )
-    bucket_name = "enggeol-landslide-pics"
-    storage_client = storage.Client(credentials=credentials, project=st.secrets["gcp_service_account"]["project_id"])
-    bucket = storage_client.bucket(bucket_name)
-    blob = bucket.blob(f"landslide_pics/{filename}.jpg")
-    blob.upload_from_file(uploaded_file, content_type=uploaded_file.type)
-    blob.make_public()
-    return blob.public_url
+    try:
+        credentials = service_account.Credentials.from_service_account_info(
+            st.secrets["gcp_service_account"]
+        )
+        bucket_name = "enggeol-landslide-pics"
+        storage_client = storage.Client(credentials=credentials, project=st.secrets["gcp_service_account"]["project_id"])
+        bucket = storage_client.bucket(bucket_name)
+        blob = bucket.blob(f"landslide_pics/{filename}.jpg")
+        uploaded_file.seek(0)  # Reset file pointer
+        blob.upload_from_file(uploaded_file, content_type=uploaded_file.type)
+        blob.make_public()
+        return blob.public_url
+    except Exception as e:
+        st.error(f"Error uploading image: {e}")
+        return None
 
 # Role-based mode selection
 if st.session_state.role == "editor":
@@ -454,64 +479,90 @@ if page == "Editor":
         additional_comments = st.text_area("Additional Comments", key="editor_comments")
         submit_btn = st.form_submit_button(label="Tambah Data")
 
-    if submit_btn:
-        img_url = None
-        if landslide_pic:
-            img_url = upload_landslide_pic_to_gcs(
-                f"{regency}_{district}_{village}_{pd.Timestamp.now().strftime('%Y%m%d%H%M%S')}",
-                landslide_pic
-            )
-        credentials = service_account.Credentials.from_service_account_info(
-            st.secrets["gcp_service_account"]
-        )
-        client = bigquery.Client(credentials=credentials, project=st.secrets["gcp_service_account"]["project_id"])
-        table_id = "enggeol-riset-kolaborasi.Longsoran.longsoran_jabar"
-        new_lid = f"L{pd.Timestamp.now().strftime('%Y%m%d%H%M%S')}"
-        rows_to_insert = [{
-            "L-ID": new_lid,
-            "Regency_City": regency,
-            "District": district,
-            "Village": village,
-            "Lattitute": latitude,
-            "Longitude": longitude,
-            "Elevation _m_": elevation,
-            "Observed Lithology": observed_lithology,
-            "Landslide Type": landslide_type,
-            "Landslide Material": landslide_material,
-            "Landslide Length _m_": landslide_length,
-            "Landslide Width _m_": landslide_width,
-            "Landslide Height _m_": landslide_height,
-            "Historical Landslide Date": landslide_date,
-            "image_url": img_url,
-            "Additional Comments": additional_comments,
-            "Data Entry": st.session_state.username,
-            "Date": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
-        }]
-        errors = client.insert_rows_json(table_id, rows_to_insert)
-        if not errors:
-            st.success("Data longsor berhasil ditambahkan!")
-        else:
-            st.error(f"Gagal menambah data: {errors}")
+        # Form submission logic INSIDE the form
+        if submit_btn:
+            # Validate required fields
+            if not regency or not district or not village or not latitude or not longitude:
+                st.error("Mohon isi semua field yang wajib (Kabupaten/Kota, Kecamatan, Desa, Latitude, Longitude)")
+            else:
+                try:
+                    img_url = None
+                    if landslide_pic:
+                        img_url = upload_landslide_pic_to_gcs(
+                            f"{regency}_{district}_{village}_{pd.Timestamp.now().strftime('%Y%m%d%H%M%S')}",
+                            landslide_pic
+                        )
+                    
+                    credentials = service_account.Credentials.from_service_account_info(
+                        st.secrets["gcp_service_account"]
+                    )
+                    client = bigquery.Client(credentials=credentials, project=st.secrets["gcp_service_account"]["project_id"])
+                    table_id = "enggeol-riset-kolaborasi.Longsoran.longsoran_jabar"
+                    new_lid = f"L{pd.Timestamp.now().strftime('%Y%m%d%H%M%S')}"
+                    
+                    rows_to_insert = [{
+                        "L-ID": new_lid,
+                        "Regency_City": regency,
+                        "District": district,
+                        "Village": village,
+                        "Lattitute": latitude,
+                        "Longitude": longitude,
+                        "Elevation _m_": elevation,
+                        "Observed Lithology": observed_lithology,
+                        "Landslide Type": landslide_type,
+                        "Landslide Material": landslide_material,
+                        "Landslide Length _m_": landslide_length,
+                        "Landslide Width _m_": landslide_width,
+                        "Landslide Height _m_": landslide_height,
+                        "Historical Landslide Date": landslide_date,
+                        "image_url": img_url,
+                        "Additional Comments": additional_comments,
+                        "Data Entry": st.session_state.username,
+                        "Date": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
+                    }]
+                    
+                    errors = client.insert_rows_json(table_id, rows_to_insert)
+                    if errors == []:
+                        st.success("Data longsor berhasil ditambahkan!")
+                        st.cache_data.clear()  # Clear cache to show new data
+                    else:
+                        st.error(f"Gagal menambah data: {errors}")
+                        
+                except Exception as e:
+                    st.error(f"Error submitting data: {e}")
 
     # Remove landslide data (show last 50 entries)
     st.write("### Hapus Data Longsor")
     df_editor = get_last_50_landslides()
-    credentials = service_account.Credentials.from_service_account_info(
-        st.secrets["gcp_service_account"]
-    )
-    client = bigquery.Client(credentials=credentials, project=st.secrets["gcp_service_account"]["project_id"])
-    for idx, row in df_editor.iterrows():
-        st.write(f"{row['Regency_City']} - {row['District']} - {row['Village']} ({row['Lattitute']}, {row['Longitude']}) [{row['Date']}]")
-        if st.button(f"Hapus {row['L-ID']}", key=f"del_{row['L-ID']}"):
-            delete_query = f"""
-            DELETE FROM `enggeol-riset-kolaborasi.Longsoran.longsoran_jabar`
-            WHERE `L-ID` = '{row['L-ID']}'
-            """
-            client.query(delete_query).result()
-            st.success("Data berhasil dihapus.")
-            st.rerun()
+    
+    if not df_editor.empty:
+        credentials = service_account.Credentials.from_service_account_info(
+            st.secrets["gcp_service_account"]
+        )
+        client = bigquery.Client(credentials=credentials, project=st.secrets["gcp_service_account"]["project_id"])
+        
+        for idx, row in df_editor.iterrows():
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                st.write(f"{row['Regency_City']} - {row['District']} - {row['Village']} ({row['Lattitute']}, {row['Longitude']}) [{row['Date']}]")
+            with col2:
+                if st.button(f"Hapus", key=f"del_{row['L-ID']}"):
+                    try:
+                        delete_query = f"""
+                        DELETE FROM `enggeol-riset-kolaborasi.Longsoran.longsoran_jabar`
+                        WHERE `L-ID` = '{row['L-ID']}'
+                        """
+                        client.query(delete_query).result()
+                        st.success("Data berhasil dihapus.")
+                        st.cache_data.clear()  # Clear cache to reflect deletion
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error deleting data: {e}")
+    else:
+        st.info("Tidak ada data untuk ditampilkan.")
 
     st.stop()
+
 # CSS for better styling
 st.markdown("""
 <style>
