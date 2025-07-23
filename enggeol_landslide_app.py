@@ -8,6 +8,7 @@ from shapely.geometry import Point
 from google.oauth2 import service_account
 from google.cloud import bigquery
 from google.cloud import firestore
+from google.cloud import storage
 from PIL import Image
 import base64
 from io import BytesIO
@@ -35,9 +36,7 @@ def get_base64_of_bin_file(bin_file):
 
 def create_login_image_placeholder():
     """Display a custom image on the login screen."""
-
     image_path = "TimePhoto_20241107_120744.jpg"
-
     if os.path.exists(image_path):
         with open(image_path, "rb") as img_file:
             encoded = base64.b64encode(img_file.read()).decode()
@@ -49,7 +48,6 @@ def create_login_image_placeholder():
                               box-shadow: 0 8px 32px rgba(0,0,0,0.15);
                               margin-bottom: 20px;"/>'''
     else:
-        # Fallback if image not found
         img_html = """
         <div style="
             width: 100%;
@@ -65,7 +63,6 @@ def create_login_image_placeholder():
             <span style="font-size: 64px; color: white;">🗻</span>
         </div>
         """
-
     return f"""
     <div style="text-align: center; margin-bottom: 30px;">
         {img_html}
@@ -89,14 +86,12 @@ def hash_password(password):
 
 def register():
     st.markdown(create_login_image_placeholder(), unsafe_allow_html=True)
-    
     with st.container():
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
             st.markdown("### 📝 Daftar Akun Baru")
             new_user = st.text_input("Username baru", placeholder="Masukkan username")
             new_pass = st.text_input("Password", type="password", placeholder="Masukkan password")
-            
             col_btn1, col_btn2 = st.columns(2)
             with col_btn1:
                 if st.button("Daftar", use_container_width=True):
@@ -106,13 +101,15 @@ def register():
                         if users_ref.document(new_user).get().exists:
                             st.warning("Username sudah digunakan.")
                         else:
-                            users_ref.document(new_user).set({"password": hash_password(new_pass)})
+                            users_ref.document(new_user).set({
+                                "password": hash_password(new_pass),
+                                "role": "viewer"
+                            })
                             st.success("Registrasi berhasil! Silakan login.")
                             st.session_state.page = "login"
                             st.rerun()
                     else:
                         st.error("Username dan password harus diisi!")
-            
             with col_btn2:
                 if st.button("Kembali ke Login", use_container_width=True):
                     st.session_state.page = "login"
@@ -120,14 +117,12 @@ def register():
 
 def login():
     st.markdown(create_login_image_placeholder(), unsafe_allow_html=True)
-    
     with st.container():
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
             st.markdown("### 🔐 Login")
             username = st.text_input("Username", placeholder="Masukkan username")
             password = st.text_input("Password", type="password", placeholder="Masukkan password")
-            
             col_btn1, col_btn2 = st.columns(2)
             with col_btn1:
                 if st.button("Login", use_container_width=True):
@@ -138,12 +133,12 @@ def login():
                         if user_doc.exists and user_doc.to_dict().get("password") == hash_password(password):
                             st.session_state.logged_in = True
                             st.session_state.username = username
+                            st.session_state.role = user_doc.to_dict().get("role", "viewer")
                             st.rerun()
                         else:
                             st.error("Login gagal. Periksa kembali username atau password.")
                     else:
                         st.error("Username dan password harus diisi!")
-            
             with col_btn2:
                 if st.button("Daftar Akun Baru", use_container_width=True):
                     st.session_state.page = "register"
@@ -157,18 +152,13 @@ def dms_to_dd(dms_str):
     Convert DMS string like '7°35\'9.81"S' or '108° 6\'16.38"E' to decimal degrees.
     """
     dms_str = dms_str.strip()
-    # Pola regex: derajat °, menit ', detik ", dan arah (N/S/E/W)
     match = re.match(r'(\d+)[°\s]+(\d+)[\'′\s]+([\d.]+)["″]?\s*([NSEW])', dms_str)
-
     if not match:
         return None
-
     degrees, minutes, seconds, direction = match.groups()
     dd = float(degrees) + float(minutes)/60 + float(seconds)/3600
-
     if direction in ['S', 'W']:
         dd *= -1
-
     return dd
 
 @st.cache_data
@@ -178,12 +168,10 @@ def load_data_from_bigquery():
     )
     project_id = "enggeol-riset-kolaborasi"
     client = bigquery.Client(credentials=credentials, project=st.secrets["gcp_service_account"]["project_id"])
-
     query = """
     SELECT * FROM `enggeol-riset-kolaborasi.Longsoran.longsoran_jabar`
     """
     df = client.query(query).to_dataframe()
-
     df["Lattitute Decimals"] = df["Lattitute"].apply(dms_to_dd)
     df["Longitude Decimals"] = df["Longitude"].apply(dms_to_dd)
     return df
@@ -202,7 +190,6 @@ def create_sidebar():
         with st.container():
             col1, col2 = st.columns([1, 2])
             with col1:
-                # Profile picture placeholder
                 st.markdown("""
                 <div style="
                     width: 50px;
@@ -222,36 +209,26 @@ def create_sidebar():
                 if st.button("Logout", key="logout_btn"):
                     st.session_state.logged_in = False
                     st.session_state.username = None
+                    st.session_state.role = None
                     st.rerun()
-        
         st.divider()
-        
         # Map Controls Section
         st.markdown("### 🗺️ Kontrol Peta")
-        
-        # Display mode
         display_mode = st.selectbox(
             "Tampilan Data",
             ["Marker", "Point", "Heatmap"],
             help="Pilih cara menampilkan data longsor di peta"
         )
-        # Base layer
         base_layer = st.selectbox(
             "Tipe Basemap",
             ["OpenStreetMap", "Satellite", "Terrain", "Kontur"],
             help="Pilih jenis peta dasar"
         )
-        
-        # Layer toggles
         st.markdown("**Layer Options:**")
         show_boundaries = st.checkbox("Tampilkan Batas Wilayah", value=True)
         show_labels = st.checkbox("Tampilkan Label", value=False)
-        
         st.divider()
-        
-        # Statistics
         st.markdown("### 📊 Statistik")
-        
         return display_mode, base_layer, show_boundaries, show_labels
 
 # ---------------------
@@ -261,6 +238,8 @@ if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
 if 'page' not in st.session_state:
     st.session_state.page = "login"
+if 'role' not in st.session_state:
+    st.session_state.role = None
 
 # ---------------------
 # Authentication Check
@@ -353,7 +332,6 @@ with col_main:
                     val = row[col]
                     val_str = '-' if pd.isna(val) else html.escape(str(val))
                     popup_html += f"<b>{html.escape(col)}:</b> {val_str}<br>"
-
             m.add_marker(
                 location=[row['Latitude Decimals'], row['Longitude Decimals']],
                 popup=popup_html,
@@ -387,8 +365,6 @@ with col_main:
 st.markdown("---")
 with st.expander("🔧 Advanced Filters", expanded=False):
     st.markdown("**Filter Data Berdasarkan Parameter Numerik:**")
-    
-    # Kolom numerik yang dapat difilter
     numeric_filters = [
         "Landslide Length (m)",
         "Landslide Width (m)",
@@ -396,17 +372,13 @@ with st.expander("🔧 Advanced Filters", expanded=False):
         "Elevation (m)",
         "Slope Angle (°)"
     ]
-    
-    # Create columns for filters
     cols = st.columns(2)
-    
     for i, col in enumerate(numeric_filters):
         if col in filtered_gdf.columns:
             filtered_gdf[col] = pd.to_numeric(filtered_gdf[col], errors="coerce")
             if not filtered_gdf[col].dropna().empty:
                 min_val = int(filtered_gdf[col].min(skipna=True))
                 max_val = int(filtered_gdf[col].max(skipna=True))
-                
                 with cols[i % 2]:
                     val_range = st.slider(
                         f"**{col}**", 
@@ -423,12 +395,109 @@ with st.sidebar:
         st.metric("Total Data Points", len(filtered_gdf))
         if not filtered_gdf.empty:
             st.metric("Wilayah Terpilih", selected_region if selected_region != "Semua" else "Seluruh Jawa Barat")
-            
-            # Additional statistics
             if "Elevation (m)" in filtered_gdf.columns:
                 avg_elevation = filtered_gdf["Elevation (m)"].mean()
                 if not pd.isna(avg_elevation):
                     st.metric("Rata-rata Elevasi (m)", f"{avg_elevation:.1f}")
+
+# ---------------------
+# Editor Panel (for editor role)
+# ---------------------
+def upload_landslide_pic_to_gcs(filename, uploaded_file):
+    credentials = service_account.Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"]
+    )
+    bucket_name = "enggeol-landslide-pics"
+    storage_client = storage.Client(credentials=credentials, project=st.secrets["gcp_service_account"]["project_id"])
+    bucket = storage_client.bucket(bucket_name)
+    blob = bucket.blob(f"landslide_pics/{filename}.jpg")
+    blob.upload_from_file(uploaded_file, content_type=uploaded_file.type)
+    blob.make_public()
+    return blob.public_url
+
+if st.session_state.role == "editor":
+    st.markdown("## ✏️ Editor Panel")
+    st.markdown("Tambah atau hapus data longsor di sini.")
+
+    # Add new landslide data
+    with st.form("add_landslide_form"):
+        st.write("### Tambah Data Longsor Baru")
+        regency = st.text_input("Kabupaten/Kota")
+        district = st.text_input("Kecamatan")
+        village = st.text_input("Desa")
+        latitude = st.text_input("Latitude (DMS format)", help="Contoh: 7°35'9.81\"S")
+        longitude = st.text_input("Longitude (DMS format)", help="Contoh: 108° 6'16.38\"E")
+        elevation = st.number_input("Elevation _m_", value=0)
+        observed_lithology = st.text_input("Observed Lithology")
+        landslide_type = st.text_input("Landslide Type")
+        landslide_material = st.text_input("Landslide Material")
+        landslide_length = st.text_input("Landslide Length _m_")
+        landslide_width = st.text_input("Landslide Width _m_")
+        landslide_height = st.text_input("Landslide Height _m_")
+        landslide_type = st.text_input("Landslide Type")
+        landslide_date = st.text_input("Historical Landslide Date")
+        landslide_pic = st.file_uploader("Upload Foto Longsor", type=["jpg", "jpeg", "png"])
+        additional_comments = st.text_area("Additional Comments")
+        submit_btn = st.form_submit_button("Tambah Data")
+
+        if submit_btn:
+            img_url = None
+            if landslide_pic:
+                img_url = upload_landslide_pic_to_gcs(
+                    f"{regency}_{district}_{village}_{pd.Timestamp.now().strftime('%Y%m%d%H%M%S')}",
+                    landslide_pic
+                )
+            credentials = service_account.Credentials.from_service_account_info(
+                st.secrets["gcp_service_account"]
+            )
+            client = bigquery.Client(credentials=credentials, project=st.secrets["gcp_service_account"]["project_id"])
+            table_id = "enggeol-riset-kolaborasi.Longsoran.longsoran_jabar"
+            new_lid = f"L{pd.Timestamp.now().strftime('%Y%m%d%H%M%S')}"  # Simple unique L-ID
+            rows_to_insert = [{
+                "L-ID": new_lid,
+                "Regency_City": regency,
+                "District": district,
+                "Village": village,
+                "Lattitute": latitude,
+                "Longitude": longitude,
+                "Elevation _m_": elevation,
+                "Observed Lithology": observed_lithology,
+                "Landslide Type": landslide_type,
+                "Landslide Material": landslide_material,
+                "Landslide Length _m_": landslide_length,
+                "Landslide Width _m_": landslide_width,
+                "Landslide Height _m_": landslide_height,
+                "Landslide Type": landslide_type,
+                "Historical Landslide Date": landslide_date,
+                "image_url": img_url,
+                "Additional Comments": additional_comments,
+                "Data Entry": st.session_state.username,
+                "Date": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
+            }]
+            errors = client.insert_rows_json(table_id, rows_to_insert)
+            if errors == []:
+                st.success("Data longsor berhasil ditambahkan!")
+            else:
+                st.error(f"Gagal menambah data: {errors}")
+
+    # Remove landslide data (show last 50 entries)
+    st.write("### Hapus Data Longsor")
+    credentials = service_account.Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"]
+    )
+    client = bigquery.Client(credentials=credentials, project=st.secrets["gcp_service_account"]["project_id"])
+    query = "SELECT `L-ID`, Regency_City, District, Village, Lattitute, Longitude, Date FROM `enggeol-riset-kolaborasi.Longsoran.longsoran_jabar` ORDER BY Date DESC LIMIT 50"
+    df_editor = client.query(query).to_dataframe()
+    for idx, row in df_editor.iterrows():
+        st.write(f"{row['Regency_City']} - {row['District']} - {row['Village']} ({row['Lattitute']}, {row['Longitude']}) [{row['Date']}]")
+        if st.button(f"Hapus {row['L-ID']}", key=f"del_{row['L-ID']}"):
+            delete_query = f"""
+            DELETE FROM `enggeol-riset-kolaborasi.Longsoran.longsoran_jabar`
+            WHERE `L-ID` = '{row['L-ID']}'
+            """
+            client.query(delete_query).result()
+            st.success("Data berhasil dihapus.")
+            st.rerun()
 
 # CSS for better styling
 st.markdown("""
