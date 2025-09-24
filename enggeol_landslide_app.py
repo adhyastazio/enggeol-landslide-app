@@ -22,11 +22,11 @@ import os
 # ---------------------
 # <-- UBAHAN: Mengadopsi format nama yang lebih eksplisit dan bersih dari kode baru.
 PROJECT_ID = st.secrets["gcp_service_account"]["project_id"]
-BQ_DATASET = "Longsoran" # atau "enggeol_landslide" sesuai kode baru
-BQ_TABLE_NAME = "longsoran_jabar" # atau "landslide_entries"
+BQ_DATASET = "Longsoran" 
+BQ_TABLE_NAME = "longsoran_jabar" 
 BQ_TABLE = f"{PROJECT_ID}.{BQ_DATASET}.{BQ_TABLE_NAME}"
 GCS_BUCKET = "enggeol-landslide-pics"
-FIRESTORE_COLLECTION = "longsor_entries" # atau "landslide_data"
+FIRESTORE_COLLECTION = "landslide_data"
 PAGE_SIZE = 50
 
 # ---------------------
