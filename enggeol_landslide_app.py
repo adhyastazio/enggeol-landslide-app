@@ -20,11 +20,14 @@ import os
 # ---------------------
 # Config / Constants
 # ---------------------
-PROJECT_ID = None  # will be taken from st.secrets
-BQ_TABLE = "enggeol-riset-kolaborasi.Longsoran.longsoran_jabar"
-GCS_BUCKET = "enggeol-landslide-pics"  # change if needed
-FIRESTORE_COLLECTION = "longsor_entries"
-PAGE_SIZE = 50  # pagination page size for editor
+# <-- UBAHAN: Mengadopsi format nama yang lebih eksplisit dan bersih dari kode baru.
+PROJECT_ID = st.secrets["gcp_service_account"]["project_id"]
+BQ_DATASET = "Longsoran" # atau "enggeol_landslide" sesuai kode baru
+BQ_TABLE_NAME = "longsoran_jabar" # atau "landslide_entries"
+BQ_TABLE = f"{PROJECT_ID}.{BQ_DATASET}.{BQ_TABLE_NAME}"
+GCS_BUCKET = "enggeol-landslide-pics"
+FIRESTORE_COLLECTION = "longsor_entries" # atau "landslide_data"
+PAGE_SIZE = 50
 
 # ---------------------
 # Page Configuration
@@ -74,11 +77,10 @@ def create_login_image_placeholder():
     """
 
 # ---------------------
-# GCP clients (cached)
+# GCP clients (cached) - (MEMPERTAHANKAN metode ini, karena lebih baik)
 # ---------------------
 @st.cache_resource
 def get_credentials():
-    # expects st.secrets["gcp_service_account"] present (dict)
     creds_info = st.secrets["gcp_service_account"]
     creds = service_account.Credentials.from_service_account_info(creds_info)
     return creds
@@ -86,20 +88,17 @@ def get_credentials():
 @st.cache_resource
 def get_firestore_client_cached():
     creds = get_credentials()
-    project = st.secrets["gcp_service_account"]["project_id"]
-    return firestore.Client(credentials=creds, project=project)
+    return firestore.Client(credentials=creds, project=PROJECT_ID)
 
 @st.cache_resource
 def get_bq_client_cached():
     creds = get_credentials()
-    project = st.secrets["gcp_service_account"]["project_id"]
-    return bigquery.Client(credentials=creds, project=project)
+    return bigquery.Client(credentials=creds, project=PROJECT_ID)
 
 @st.cache_resource
 def get_gcs_client_cached():
     creds = get_credentials()
-    project = st.secrets["gcp_service_account"]["project_id"]
-    return storage.Client(credentials=creds, project=project)
+    return storage.Client(credentials=creds, project=PROJECT_ID)
 
 # ---------------------
 # Utility functions
@@ -113,21 +112,24 @@ def dms_to_dd(dms_str):
     if pd.isna(dms_str) or not dms_str:
         return None
     s = str(dms_str).strip()
-    match = re.match(r'(\d+)[°\s]+(\d+)[\'′\s]+([\d.]+)["″]?\s*([NSEW])', s)
+    # First, try to parse as a simple float
+    try:
+        return float(s)
+    except ValueError:
+        pass  # If it fails, continue to DMS parsing
+    
+    match = re.match(r'(\d+)[°\s]+(\d+)[\'′\s]+([\d.]+)["″]?\s*([NSEW])', s, re.IGNORECASE)
     if not match:
-        # try parse as decimal
-        try:
-            return float(s)
-        except:
-            return None
+        return None
+    
     degrees, minutes, seconds, direction = match.groups()
     dd = float(degrees) + float(minutes)/60 + float(seconds)/3600
-    if direction in ['S', 'W']:
+    if direction.upper() in ['S', 'W']:
         dd *= -1
     return dd
 
 # ---------------------
-# GCS upload (resize + upload) 
+# GCS upload (resize + upload) - (MEMPERTAHANKAN metode ini, karena lebih baik)
 # ---------------------
 def upload_image_to_gcs_and_get_url(filename_noext, uploaded_file, bucket_name=GCS_BUCKET, resize_max=(1280,720)):
     try:
@@ -166,11 +168,12 @@ def save_entry_to_firestore(entry_dict, doc_id=None):
         col.document(doc_id).set(entry_dict, merge=True)
         return doc_id
     else:
-        new_doc = col.document()
+        # <-- UBAHAN: Menggunakan L-ID sebagai ID dokumen untuk konsistensi
+        doc_ref = col.document(entry_dict["L-ID"])
         entry_dict["_created_at"] = firestore.SERVER_TIMESTAMP
         entry_dict["bigquery_synced"] = False
-        new_doc.set(entry_dict)
-        return new_doc.id
+        doc_ref.set(entry_dict)
+        return doc_ref.id
 
 def get_recent_entries_from_firestore(limit=50):
     db = get_firestore_client_cached()
@@ -179,8 +182,7 @@ def get_recent_entries_from_firestore(limit=50):
     for d in docs:
         dd = d.to_dict()
         dd["_doc_id"] = d.id
-        # ensure title case
-        for fld in ["Province", "Regency_City", "District", "Village", "province", "regency_city", "regency", "district", "village"]:
+        for fld in ["Province", "Regency_City", "District", "Village"]:
             if fld in dd:
                 dd[fld] = titlecase_column(dd[fld])
         rows.append(dd)
@@ -194,15 +196,14 @@ def get_entries_paginated(page_number=0, page_size=PAGE_SIZE):
     for d in docs:
         dd = d.to_dict()
         dd["_doc_id"] = d.id
-        # title case
-        for fld in ["Province", "Regency_City", "District", "Village", "province", "regency_city", "regency", "district", "village"]:
+        for fld in ["Province", "Regency_City", "District", "Village"]:
             if fld in dd:
                 dd[fld] = titlecase_column(dd[fld])
         rows.append(dd)
     return pd.DataFrame(rows) if rows else pd.DataFrame()
 
 # ---------------------
-# Batch Sync Firestore -> BigQuery
+# Batch Sync Firestore -> BigQuery - (MEMPERTAHANKAN metode ini, karena jauh lebih efisien)
 # ---------------------
 def batch_sync_firestore_to_bigquery(dataset_table=BQ_TABLE):
     st.info("Starting batch sync to BigQuery...")
@@ -214,7 +215,6 @@ def batch_sync_firestore_to_bigquery(dataset_table=BQ_TABLE):
         st.success("Tidak ada data baru untuk disinkronkan.")
         return
 
-    # Get BigQuery table schema fields to avoid inserting unknown columns
     table_ref = client.get_table(dataset_table)
     bq_fields = [f.name for f in table_ref.schema]
 
@@ -222,21 +222,24 @@ def batch_sync_firestore_to_bigquery(dataset_table=BQ_TABLE):
     doc_id_map = []
     for d in docs:
         data = d.to_dict()
-        # Remove internal fields not intended for BigQuery
         data.pop("_created_at", None)
         data.pop("bigquery_synced", None)
-        # Convert Timestamp -> string
+        
         for k, v in list(data.items()):
-            if isinstance(v, datetime):
+            if isinstance(v, datetime) or isinstance(v, date):
                 data[k] = v.strftime("%Y-%m-%d %H:%M:%S")
-        # Titlecase region fields
+        
         for fld in ["Regency_City", "District", "Village", "Province"]:
             if fld in data:
                 data[fld] = titlecase_column(data[fld])
-        # Keep only fields present in BigQuery schema
+        
         filtered = {k: v for k, v in data.items() if k in bq_fields}
         ndjson_lines.append(json.dumps(filtered, ensure_ascii=False))
         doc_id_map.append(d.id)
+
+    if not ndjson_lines:
+        st.warning("Tidak ada data yang cocok dengan skema BigQuery untuk disinkronkan.")
+        return
 
     ndjson_bytes = "\n".join(ndjson_lines).encode("utf-8")
     file_obj = BytesIO(ndjson_bytes)
@@ -250,7 +253,6 @@ def batch_sync_firestore_to_bigquery(dataset_table=BQ_TABLE):
     try:
         load_job = client.load_table_from_file(file_obj, dataset_table, job_config=job_config)
         load_job.result()
-        # mark docs as synced
         for doc_id in doc_id_map:
             db.collection(FIRESTORE_COLLECTION).document(doc_id).update({"bigquery_synced": True, "bigquery_synced_at": firestore.SERVER_TIMESTAMP})
         st.success(f"Berhasil sinkron {len(doc_id_map)} dokumen ke BigQuery.")
@@ -262,7 +264,7 @@ def batch_sync_firestore_to_bigquery(dataset_table=BQ_TABLE):
             pass
 
 # ---------------------
-# CSV handler
+# CSV handler - (MEMPERTAHANKAN metode ini, karena lebih fungsional)
 # ---------------------
 def handle_csv_and_images_upload(csv_file, image_files_list):
     try:
@@ -276,14 +278,14 @@ def handle_csv_and_images_upload(csv_file, image_files_list):
 
     count = 0
     for i, row in df_csv.iterrows():
-        if "id_longsor" in df_csv.columns and pd.notna(row.get("id_longsor")):
-            lid = str(row.get("id_longsor"))
+        # <-- UBAHAN: Mengadopsi generator ID yang lebih kuat
+        if "L-ID" in df_csv.columns and pd.notna(row.get("L-ID")):
+            lid = str(row.get("L-ID"))
         else:
-            lid = f"L{pd.Timestamp.now().strftime('%Y%m%d%H%M%S')}_{i}"
+            lid = f"L{pd.Timestamp.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:4]}"
 
         entry = row.to_dict()
-        # normalize region names
-        for col in ["Province", "province", "Regency_City", "regency_city", "District", "district", "Village", "village"]:
+        for col in ["Province", "Regency_City", "District", "Village"]:
             if col in entry and pd.notna(entry[col]):
                 entry[col] = titlecase_column(entry[col])
 
@@ -293,7 +295,6 @@ def handle_csv_and_images_upload(csv_file, image_files_list):
             "Date": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
         })
 
-        # image matching
         image_url = None
         image_filename = None
         if "image_filename" in df_csv.columns and pd.notna(row.get("image_filename")):
@@ -316,61 +317,34 @@ def handle_csv_and_images_upload(csv_file, image_files_list):
 # ---------------------
 @st.cache_data(ttl=300)
 def load_data_for_viewer():
-    # Load historical from BigQuery
     try:
         bq = get_bq_client_cached()
         df_bq = bq.query(f"SELECT * FROM `{BQ_TABLE}`").to_dataframe()
     except Exception as e:
-        st.error(f"Error loading BigQuery data: {e}")
+        st.warning(f"Tidak dapat memuat data dari BigQuery: {e}. Menampilkan data terbaru saja.")
         df_bq = pd.DataFrame()
 
-    # Load recent from Firestore (limit e.g. 500)
     try:
         fs_df = get_recent_entries_from_firestore(limit=500)
     except Exception as e:
         st.error(f"Error loading Firestore data: {e}")
         fs_df = pd.DataFrame()
 
-    # Normalize columns: ensure both have Lattitute / Longitude fields
-    # Firestore entries might have "Lattitute" or "Lattitute" spelled; we'll attempt to map
     if not fs_df.empty:
-        # try convert coordinate fields
         if "Lattitute" not in fs_df.columns and "lat" in fs_df.columns:
             fs_df["Lattitute"] = fs_df["lat"]
         if "Longitude" not in fs_df.columns and "lon" in fs_df.columns:
             fs_df["Longitude"] = fs_df["lon"]
         if "Date" not in fs_df.columns and "date" in fs_df.columns:
             fs_df["Date"] = fs_df["date"]
+    
+    combined = pd.concat([df_bq, fs_df], ignore_index=True).drop_duplicates(subset=["L-ID"], keep='last')
 
-    # Combine: prefer firestore rows (recent) to override BQ rows with same L-ID
-    if not df_bq.empty and not fs_df.empty:
-        if "L-ID" in df_bq.columns:
-            bq_indexed = df_bq.set_index("L-ID")
-            # convert firestore to same columns where possible
-            merged = bq_indexed.copy()
-            for _, row in fs_df.iterrows():
-                lid = row.get("L-ID")
-                if lid and lid in merged.index:
-                    # replace row
-                    for c, v in row.items():
-                        merged.at[lid, c] = v
-                else:
-                    # append new row
-                    merged = merged.append(pd.Series(row).rename(lid))
-            combined = merged.reset_index()
-        else:
-            combined = pd.concat([df_bq, fs_df], ignore_index=True, sort=False)
-    elif not df_bq.empty:
-        combined = df_bq
-    else:
-        combined = fs_df
-
-    # Convert DMS to decimals if needed
     if "Lattitute" in combined.columns:
-        combined["Lattitute Decimals"] = combined["Lattitute"].apply(dms_to_dd)
+        combined["Latitude Decimals"] = combined["Lattitute"].apply(dms_to_dd)
     if "Longitude" in combined.columns:
         combined["Longitude Decimals"] = combined["Longitude"].apply(dms_to_dd)
-
+        
     return combined
 
 # ---------------------
@@ -418,7 +392,7 @@ def login():
                         st.session_state.logged_in = True
                         st.session_state.username = username
                         st.session_state.role = doc.to_dict().get("role", "viewer")
-                        st.experimental_rerun()
+                        st.rerun()
                     else:
                         st.error("Login gagal. Periksa username/password.")
                 else:
@@ -426,7 +400,7 @@ def login():
         with col2:
             if st.button("Daftar Akun Baru"):
                 st.session_state.page = "register"
-                st.experimental_rerun()
+                st.rerun()
 
 # Initialize session state
 if 'logged_in' not in st.session_state:
@@ -449,7 +423,6 @@ if not st.session_state.logged_in:
 # ---------------------
 st.title("🗻 Landslide Viewer - Jawa Barat")
 
-# Sidebar / Controls
 def create_sidebar():
     with st.sidebar:
         st.markdown("### Profil Pengguna")
@@ -469,7 +442,7 @@ def create_sidebar():
                 st.session_state.logged_in = False
                 st.session_state.username = None
                 st.session_state.role = None
-                st.experimental_rerun()
+                st.rerun()
         st.divider()
         st.markdown("### 🗺️ Kontrol Peta")
         display_mode = st.selectbox("Tampilan Data", ["Marker", "Point", "Heatmap"])
@@ -482,7 +455,6 @@ def create_sidebar():
 
 display_mode, base_layer, show_boundaries, show_labels = create_sidebar()
 
-# Load data for viewer
 df = load_data_for_viewer()
 gdf = None
 try:
@@ -496,82 +468,71 @@ if df.empty or gdf is None:
 
 df.columns = df.columns.str.strip()
 
-# Prepare map & filtering
 col_main, col_filters = st.columns([3,1])
 with col_main:
     regency_col = "Regency_City"
     district_col_df = "District"
     boundary_col = "KABKOT"
     if regency_col in df.columns:
-        df[regency_col] = df[regency_col].astype(str).str.lower()
+        df[regency_col] = df[regency_col].astype(str).str.lower().str.title()
     if district_col_df in df.columns:
-        df[district_col_df] = df[district_col_df].astype(str).str.lower()
+        df[district_col_df] = df[district_col_df].astype(str).str.lower().str.title()
     if boundary_col in gdf.columns:
-        gdf[boundary_col] = gdf[boundary_col].astype(str).str.lower()
-    # Select region
+        gdf[boundary_col] = gdf[boundary_col].astype(str).str.lower().str.title()
+    
     col1, col2 = st.columns(2)
     with col1:
         possible_regions = ["Semua"]
-        if boundary_col in gdf.columns:
-            possible_regions += sorted(gdf[boundary_col].unique())
+        if regency_col in df.columns:
+            possible_regions += sorted(df[regency_col].dropna().unique())
         selected_region = st.selectbox("Pilih Kabupaten/Kota", possible_regions)
-    # convert to points
-    df = df.dropna(subset=["Lattitute Decimals", "Longitude Decimals"])
-    df["Latitude Decimals"] = pd.to_numeric(df["Lattitute Decimals"], errors="coerce")
-    df["Longitude Decimals"] = pd.to_numeric(df["Longitude Decimals"], errors="coerce")
+    
+    df = df.dropna(subset=["Latitude Decimals", "Longitude Decimals"])
     gdf_points = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df["Longitude Decimals"], df["Latitude Decimals"]), crs="EPSG:4326")
 
     if selected_region != "Semua":
-        selected_boundary = gdf[gdf[boundary_col] == selected_region.lower()]
-        if not selected_boundary.empty:
-            filtered_gdf = gpd.sjoin(gdf_points, selected_boundary, how="inner", predicate="within")
-            boundary = selected_boundary
-        else:
-            filtered_gdf = gdf_points.copy()
-            boundary = gdf.copy()
+        filtered_gdf = gdf_points[gdf_points[regency_col] == selected_region].copy()
+        boundary = gdf[gdf[boundary_col] == selected_region].copy()
     else:
         filtered_gdf = gdf_points.copy()
         boundary = gdf.copy()
 
-    # district filter
     available_districts = sorted(filtered_gdf[district_col_df].dropna().unique()) if district_col_df in filtered_gdf.columns else []
     with col2:
         selected_district = st.selectbox("Pilih Kecamatan", ["Semua"] + available_districts)
     if selected_district != "Semua":
-        filtered_gdf = filtered_gdf[filtered_gdf[district_col_df] == selected_district.lower()]
+        filtered_gdf = filtered_gdf[filtered_gdf[district_col_df] == selected_district]
 
-    # map
     basemap_dict = {"OpenStreetMap":"OpenStreetMap", "Satellite":"HYBRID", "Terrain":"TERRAIN", "Kontur":"Esri.WorldTopoMap"}
     m = leafmap.Map(center=[-7.1, 107.6], zoom=8)
     m.add_basemap(basemap_dict.get(base_layer, "OpenStreetMap"))
-    if show_boundaries:
+    
+    if show_boundaries and not boundary.empty:
         m.add_gdf(boundary, layer_name="Batas Wilayah")
-    if display_mode == "Marker":
-        for _, row in filtered_gdf.iterrows():
-            popup_html = "<b><u>Informasi Longsoran</u></b><br>"
-            for col in filtered_gdf.columns:
-                if col not in ['Latitude Decimals', 'Longitude Decimals', 'geometry']:
-                    val = row.get(col)
-                    val_str = '-' if pd.isna(val) else html.escape(str(val))
-                    popup_html += f"<b>{html.escape(col)}:</b> {val_str}<br>"
-            try:
-                m.add_marker(location=[row['Latitude Decimals'], row['Longitude Decimals']], popup=popup_html, icon=leafmap.folium.Icon(icon='map-marker', color='red'))
-            except Exception:
-                pass
-    elif display_mode == "Point":
+    
+    popup_cols = [c for c in filtered_gdf.columns if c not in ['geometry', 'Latitude Decimals', 'Longitude Decimals', '_doc_id']]
+    
+    if display_mode == "Marker" and not filtered_gdf.empty:
+        m.add_points_from_xy(
+            filtered_gdf,
+            x="Longitude Decimals",
+            y="Latitude Decimals",
+            popup=popup_cols,
+            layer_name="Landslide Markers"
+        )
+    elif display_mode == "Point" and not filtered_gdf.empty:
         m.add_points_from_xy(filtered_gdf, x="Longitude Decimals", y="Latitude Decimals", layer_name="Landslide Points")
-    elif display_mode == "Heatmap":
-        if not filtered_gdf.empty:
-            heatmap_data = filtered_gdf[['Latitude Decimals','Longitude Decimals']].copy()
-            heatmap_data['value'] = 1
-            m.add_heatmap(data=heatmap_data, latitude='Latitude Decimals', longitude='Longitude Decimals', value='value', radius=15)
-
+    elif display_mode == "Heatmap" and not filtered_gdf.empty:
+        heatmap_data = filtered_gdf[['Latitude Decimals','Longitude Decimals']].copy()
+        heatmap_data['value'] = 1
+        m.add_heatmap(data=heatmap_data, latitude='Latitude Decimals', longitude='Longitude Decimals', value='value', radius=15)
+        
     m.to_streamlit(height=600)
 
-# Advanced Filters
 st.markdown("---")
 with st.expander("🔧 Advanced Filters", expanded=False):
     st.markdown("**Filter Data Berdasarkan Parameter Numerik:**")
+    # <-- UBAHAN: Menyesuaikan nama kolom dengan skema data baru yang lebih bersih
     numeric_filters = ["Landslide Length (m)","Landslide Width (m)","Landslide Height (m)","Elevation (m)","Slope Angle (°)"]
     cols = st.columns(2)
     for i, coln in enumerate(numeric_filters):
@@ -580,193 +541,224 @@ with st.expander("🔧 Advanced Filters", expanded=False):
             if not filtered_gdf[coln].dropna().empty:
                 min_val = int(filtered_gdf[coln].min(skipna=True))
                 max_val = int(filtered_gdf[coln].max(skipna=True))
-                with cols[i%2]:
-                    val_range = st.slider(f"**{coln}**", min_val, max_val, (min_val, max_val), key=f"filter_{coln}")
-                    filtered_gdf = filtered_gdf[filtered_gdf[coln].between(val_range[0], val_range[1])]
+                if min_val < max_val:
+                    with cols[i%2]:
+                        val_range = st.slider(f"**{coln}**", min_val, max_val, (min_val, max_val), key=f"filter_{coln}")
+                        filtered_gdf = filtered_gdf[filtered_gdf[coln].between(val_range[0], val_range[1])]
 
-# Sidebar metrics
 with st.sidebar:
     if 'filtered_gdf' in locals():
         st.metric("Total Data Points", len(filtered_gdf))
         if not filtered_gdf.empty:
             st.metric("Wilayah Terpilih", selected_region if selected_region != "Semua" else "Seluruh Jawa Barat")
+            # <-- UBAHAN: Menyesuaikan nama kolom
             if "Elevation (m)" in filtered_gdf.columns:
                 avg_elevation = filtered_gdf["Elevation (m)"].mean()
                 if not pd.isna(avg_elevation):
                     st.metric("Rata-rata Elevasi (m)", f"{avg_elevation:.1f}")
 
 # ---------------------
-# Editor Panel (Firestore-backed) with pagination
+# Editor Panel (Firestore-backed)
 # ---------------------
-if st.session_state.role == "editor":
+if st.session_state.role in ["editor", "admin"]:
     page_mode = st.sidebar.radio("Mode", ["Viewer","Editor"], index=0)
 else:
     page_mode = "Viewer"
 
 if page_mode == "Editor":
-    st.markdown("## ✏️ Editor Panel (Firestore-backed)")
-    st.markdown("Tambah / edit / hapus data longsor di sini. Data disimpan di Firestore. Gunakan Sync to BigQuery untuk batch load ke BigQuery.")
+    st.markdown("## ✏️ Editor Panel")
+    st.info("Tambah, edit, atau hapus data. Data disimpan di Firestore dan dapat disinkronkan ke BigQuery.")
 
-    # Manual entry
-    with st.expander("Tambah Data Manual (Single)", expanded=True):
-        with st.form("manual_add_form"):
-            regency = st.text_input("Kabupaten/Kota", key="m_regency")
-            district = st.text_input("Kecamatan", key="m_district")
-            village = st.text_input("Desa", key="m_village")
-            latitude = st.text_input("Latitude (DMS or decimal)", key="m_latitude")
-            longitude = st.text_input("Longitude (DMS or decimal)", key="m_longitude")
-            elevation = st.number_input("Elevation (m)", value=0, key="m_elevation")
-            observed_lithology = st.text_input("Observed Lithology", key="m_lithology")
-            landslide_type = st.text_input("Landslide Type", key="m_type")
-            landslide_material = st.text_input("Landslide Material", key="m_material")
-            landslide_length = st.text_input("Landslide Length (m)", key="m_length")
-            landslide_width = st.text_input("Landslide Width (m)", key="m_width")
-            landslide_height = st.text_input("Landslide Height (m)", key="m_height")
-            landslide_date = st.date_input("Tanggal Kejadian Longsor", value=date.today(), key="m_date")
-            landslide_pic = st.file_uploader("Upload Foto Longsor (opsional)", type=["jpg","jpeg","png"], key="m_pic")
-            additional_comments = st.text_area("Additional Comments", key="m_comments")
+    # <-- UBAHAN TOTAL: Mengadopsi form dari kode baru yang lebih rapi dan fungsional.
+    with st.expander("Tambah Data Manual", expanded=True):
+        with st.form("manual_add_form", clear_on_submit=True):
+            st.markdown("##### Informasi Lokasi")
+            col1, col2 = st.columns(2)
+            with col1:
+                regency = st.text_input("Kabupaten/Kota*", key="m_regency")
+                district = st.text_input("Kecamatan*", key="m_district")
+                village = st.text_input("Desa*", key="m_village")
+            with col2:
+                latitude = st.number_input("Latitude (Desimal)*", format="%.6f", key="m_lat", step=0.000001)
+                longitude = st.number_input("Longitude (Desimal)*", format="%.6f", key="m_lon", step=0.000001)
+                elevation = st.number_input("Elevasi (m)", key="m_elev", step=1.0)
+            
+            st.markdown("##### Informasi Longsoran")
+            col3, col4 = st.columns(2)
+            with col3:
+                landslide_date = st.date_input("Tanggal Kejadian", value=date.today(), key="m_date")
+                observed_lithology = st.text_input("Litologi Teramati", key="m_lithology")
+                landslide_type = st.text_input("Tipe Longsor", key="m_type")
+                landslide_material = st.text_input("Material Longsor", key="m_material")
+            with col4:
+                landslide_length = st.number_input("Panjang Longsoran (m)", key="m_length", step=0.1)
+                landslide_width = st.number_input("Lebar Longsoran (m)", key="m_width", step=0.1)
+                landslide_height = st.number_input("Tinggi Longsoran (m)", key="m_height", step=0.1)
+                landslide_pic = st.file_uploader("Upload Foto Longsor", type=["jpg","jpeg","png"], key="m_pic")
+            
+            additional_comments = st.text_area("Komentar Tambahan", key="m_comments")
+            
             submitted = st.form_submit_button("Simpan ke Firestore")
 
             if submitted:
-                if not regency or not district or not village or not latitude or not longitude:
-                    st.error("Mohon isi field: Kabupaten/Kota, Kecamatan, Desa, Latitude, Longitude")
+                if not all([regency, district, village, latitude, longitude]):
+                    st.error("Mohon isi semua field yang ditandai bintang (*).")
                 else:
-                    new_lid = f"L{pd.Timestamp.now().strftime('%Y%m%d%H%M%S')}"
+                    # <-- BARU: Mengadopsi L-ID yang lebih kuat dari kode baru.
+                    new_lid = f"L{pd.Timestamp.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:4]}"
+                    
+                    # <-- UBAHAN: Mengadopsi skema data yang lebih bersih dari kode baru.
                     entry = {
                         "L-ID": new_lid,
+                        "Province": "Jawa Barat",
                         "Regency_City": titlecase_column(regency),
                         "District": titlecase_column(district),
                         "Village": titlecase_column(village),
                         "Lattitute": latitude,
                         "Longitude": longitude,
-                        "Elevation _m_": elevation,
+                        "Elevation (m)": elevation,
                         "Observed Lithology": observed_lithology,
                         "Landslide Type": landslide_type,
                         "Landslide Material": landslide_material,
-                        "Landslide Length _m_": landslide_length,
-                        "Landslide Width _m_": landslide_width,
-                        "Landslide Height _m_": landslide_height,
-                        "Historical Landslide Date": landslide_date,
+                        "Landslide Length (m)": landslide_length,
+                        "Landslide Width (m)": landslide_width,
+                        "Landslide Height (m)": landslide_height,
+                        "Date": landslide_date.strftime("%Y-%m-%d"),
                         "Additional Comments": additional_comments,
                         "Data Entry": st.session_state.username,
-                        "Date": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
                     }
                     if landslide_pic:
                         url = upload_image_to_gcs_and_get_url(f"{new_lid}", landslide_pic)
                         if url:
                             entry["image_url"] = url
+                    
                     save_entry_to_firestore(entry)
-                    st.success("Data berhasil disimpan di Firestore (akan di-sync ke BigQuery bila diminta).")
+                    st.success(f"Data {new_lid} berhasil disimpan. Muat ulang halaman untuk melihat pembaruan di peta.")
+                    st.cache_data.clear() # Membersihkan cache agar data baru bisa dimuat
 
     st.markdown("---")
 
-    # CSV mass upload
-    with st.expander("Mass Upload CSV (plus optional images)", expanded=False):
-        st.markdown("Format CSV: kolom seperti id_longsor (opsional), lat, lon, tanggal, deskripsi, image_filename (opsional).")
-        uploaded_csv = st.file_uploader("Upload CSV", type=["csv"])
-        uploaded_imgs = st.file_uploader("Upload Images (opsional, multiple)", type=["jpg","jpeg","png"], accept_multiple_files=True)
+    with st.expander("Upload Massal via CSV", expanded=False):
+        st.markdown("Pastikan nama kolom di CSV Anda cocok dengan field di form manual (contoh: `Regency_City`, `Lattitute`, `Landslide Type`, dll). `L-ID` opsional, akan dibuat otomatis jika kosong. `image_filename` bisa digunakan untuk mencocokkan dengan gambar.")
+        uploaded_csv = st.file_uploader("Upload CSV", type=["csv"], key="csv_upload")
+        uploaded_imgs = st.file_uploader("Upload Gambar (opsional, jika ada kolom `image_filename` di CSV)", type=["jpg","jpeg","png"], accept_multiple_files=True, key="img_upload")
         if st.button("Proses CSV"):
             if not uploaded_csv:
                 st.error("Silakan pilih file CSV terlebih dahulu.")
             else:
                 handle_csv_and_images_upload(uploaded_csv, uploaded_imgs)
+                st.cache_data.clear()
 
     st.markdown("---")
-
-    # Pagination
+    
+    # Editor & Pagination
+    st.markdown("#### Daftar Entri Terbaru (Edit / Hapus)")
     if "editor_page" not in st.session_state:
         st.session_state.editor_page = 0
+    
+    df_editor = get_entries_paginated(page_number=st.session_state.editor_page, page_size=PAGE_SIZE)
+    
     colp1, colp2, colp3 = st.columns([1,2,1])
     with colp1:
-        if st.button("⬅️ Previous") and st.session_state.editor_page > 0:
+        if st.button("⬅️ Halaman Sebelumnya", disabled=(st.session_state.editor_page == 0)):
             st.session_state.editor_page -= 1
-            st.experimental_rerun()
+            st.rerun()
+    with colp2:
+        st.markdown(f"<p style='text-align:center;'>Halaman {st.session_state.editor_page + 1}</p>", unsafe_allow_html=True)
     with colp3:
-        # We will enable Next only if the returned page was full
-        pass
-
-    # show paginated table
-    df_editor = get_entries_paginated(page_number=st.session_state.editor_page, page_size=PAGE_SIZE)
+        if st.button("Halaman Berikutnya ➡️", disabled=(len(df_editor) < PAGE_SIZE)):
+            st.session_state.editor_page += 1
+            st.rerun()
+            
     if df_editor.empty:
         st.info("Tidak ada data pada halaman ini.")
     else:
-        display_cols = [c for c in df_editor.columns if not c.startswith("_")]
-        st.dataframe(df_editor[display_cols].reset_index(drop=True), use_container_width=True)
-        # Next button: enable if page had full size
-        if len(df_editor) == PAGE_SIZE:
-            with colp3:
-                if st.button("Next ➡️"):
-                    st.session_state.editor_page += 1
-                    st.experimental_rerun()
+        display_cols = ['L-ID', 'Regency_City', 'District', 'Village', 'Date', 'Data Entry', 'bigquery_synced']
+        st.dataframe(df_editor[[c for c in display_cols if c in df_editor.columns]].reset_index(drop=True), use_container_width=True)
 
-        # Edit/Delete selection
-        chosen = st.selectbox("Pilih L-ID untuk Edit / Hapus", options=df_editor["L-ID"].tolist())
-        selected_row = df_editor[df_editor["L-ID"] == chosen].iloc[0].to_dict()
+        chosen_id = st.selectbox("Pilih L-ID untuk Edit / Hapus", options=df_editor["L-ID"].tolist())
+        selected_row = df_editor[df_editor["L-ID"] == chosen_id].iloc[0].to_dict()
 
-        st.markdown("#### Edit Entry")
-        with st.form("edit_form"):
-            e_regency = st.text_input("Kabupaten/Kota", value=selected_row.get("Regency_City",""))
-            e_district = st.text_input("Kecamatan", value=selected_row.get("District",""))
-            e_village = st.text_input("Desa", value=selected_row.get("Village",""))
-            e_lat = st.text_input("Latitude", value=selected_row.get("Lattitute",""))
-            e_lon = st.text_input("Longitude", value=selected_row.get("Longitude",""))
-            e_date = st.text_input("Date", value=selected_row.get("Date",""))
-            e_comments = st.text_area("Additional Comments", value=selected_row.get("Additional Comments",""))
-            e_pic = st.file_uploader("Ganti / Tambah foto (optional)", type=["jpg","jpeg","png"], key="edit_pic")
-            submit_edit = st.form_submit_button("Simpan Perubahan")
+        with st.expander(f"Edit Entri: {chosen_id}"):
+            with st.form("edit_form"):
+                e_regency = st.text_input("Kabupaten/Kota", value=selected_row.get("Regency_City",""))
+                e_district = st.text_input("Kecamatan", value=selected_row.get("District",""))
+                e_village = st.text_input("Desa", value=selected_row.get("Village",""))
+                e_lat = st.number_input("Latitude", value=float(selected_row.get("Lattitute", 0.0)), format="%.6f")
+                e_lon = st.number_input("Longitude", value=float(selected_row.get("Longitude", 0.0)), format="%.6f")
+                e_comments = st.text_area("Komentar Tambahan", value=selected_row.get("Additional Comments",""))
+                e_pic = st.file_uploader("Ganti / Tambah foto", type=["jpg","jpeg","png"], key="edit_pic")
+                
+                col_b1, col_b2 = st.columns(2)
+                with col_b1:
+                    submit_edit = st.form_submit_button("Simpan Perubahan")
+                with col_b2:
+                    delete_button = st.form_submit_button("Hapus Entri Ini", help="Tindakan ini tidak bisa dibatalkan!")
 
-            if submit_edit:
-                doc_id = selected_row["_doc_id"]
-                update_entry = {
-                    "Regency_City": titlecase_column(e_regency),
-                    "District": titlecase_column(e_district),
-                    "Village": titlecase_column(e_village),
-                    "Lattitute": e_lat,
-                    "Longitude": e_lon,
-                    "Date": e_date,
-                    "Additional Comments": e_comments,
-                    "Data Entry": st.session_state.username,
-                }
-                if e_pic:
-                    url = upload_image_to_gcs_and_get_url(f"{chosen}_edit", e_pic)
-                    if url:
-                        update_entry["image_url"] = url
-                save_entry_to_firestore(update_entry, doc_id=doc_id)
-                st.success("Perubahan disimpan ke Firestore.")
+                if submit_edit:
+                    doc_id = selected_row["_doc_id"]
+                    update_entry = {k:v for k,v in selected_row.items() if not k.startswith('_')} # start with existing data
+                    update_entry.update({
+                        "Regency_City": titlecase_column(e_regency),
+                        "District": titlecase_column(e_district),
+                        "Village": titlecase_column(e_village),
+                        "Lattitute": e_lat,
+                        "Longitude": e_lon,
+                        "Additional Comments": e_comments,
+                        "Data Entry": st.session_state.username,
+                        "bigquery_synced": False, # Mark as needs-sync after edit
+                    })
+                    if e_pic:
+                        url = upload_image_to_gcs_and_get_url(f"{chosen_id}_edit", e_pic)
+                        if url:
+                            update_entry["image_url"] = url
+                    save_entry_to_firestore(update_entry, doc_id=doc_id)
+                    st.success("Perubahan disimpan. Muat ulang halaman untuk pembaruan.")
+                    st.cache_data.clear()
 
-        if st.button("Hapus Entry Terpilih"):
-            doc_id = selected_row["_doc_id"]
-            try:
-                get_firestore_client_cached().collection(FIRESTORE_COLLECTION).document(doc_id).delete()
-                st.success("Dokumen dihapus dari Firestore.")
-            except Exception as e:
-                st.error(f"Gagal menghapus: {e}")
+                if delete_button:
+                    st.warning(f"Anda yakin ingin menghapus {chosen_id}?")
+                    if st.button("Ya, Hapus Permanen"):
+                        doc_id = selected_row["_doc_id"]
+                        try:
+                            get_firestore_client_cached().collection(FIRESTORE_COLLECTION).document(doc_id).delete()
+                            st.success("Dokumen dihapus dari Firestore.")
+                            st.cache_data.clear()
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Gagal menghapus: {e}")
+
 
     st.markdown("---")
-    # Sync button (runs batch sync in-app)
-    if st.button("Sync to BigQuery (batch load)"):
+    st.markdown("#### Sinkronisasi Data")
+    if st.button("Sinkronkan Data Baru ke BigQuery"):
         batch_sync_firestore_to_bigquery(dataset_table=BQ_TABLE)
-
-    st.stop()
-
+        st.cache_data.clear()
+        
 # ---------------------
 # CSS
 # ---------------------
 st.markdown("""
 <style>
-    .stSelectbox > div > div > select {
-        background-color: #f8f9fa;
+    .stApp {
+        background-color: #FFFFFF;
+    }
+    .stSelectbox, .stTextInput, .stNumberInput, .stDateInput, .stTextArea {
+        border-radius: 0.5rem;
+    }
+    .stButton > button {
+        border-radius: 0.5rem;
+        border: 1px solid #667eea;
+        color: #667eea;
+    }
+    .stButton > button:hover {
+        border-color: #764ba2;
+        color: #764ba2;
     }
     .stExpander {
         border: 1px solid #e9ecef;
         border-radius: 0.5rem;
         margin-top: 1rem;
-    }
-    .metric-container {
-        background-color: #f8f9fa;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin: 0.5rem 0;
     }
 </style>
 """, unsafe_allow_html=True)
